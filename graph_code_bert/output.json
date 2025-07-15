@@ -1,7 +1,7 @@
 [
   {
-    "line" : 2,
-    "ident" : "name"
+    "ident" : "name",
+    "line" : 2
   },
   {
     "ident" : "print",
