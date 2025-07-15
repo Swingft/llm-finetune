@@ -1,0 +1,18 @@
+[
+  {
+    "line" : 2,
+    "ident" : "name"
+  },
+  {
+    "ident" : "print",
+    "line" : 3
+  },
+  {
+    "ident" : "message",
+    "line" : 3
+  },
+  {
+    "line" : 4,
+    "ident" : "message"
+  }
+]
