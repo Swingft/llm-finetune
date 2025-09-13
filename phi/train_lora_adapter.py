@@ -12,8 +12,7 @@ from trl import SFTTrainer, SFTConfig
 # 0) 환경 / 토큰
 # =========================
 
-# HF_TOKEN: Optional[str] = os.environ.get("HF_TOKEN")
-
+HF_TOKEN: Optional[str] = os.environ.get("HF_TOKEN")
 # 캐시/경고 소음 줄이기
 os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -169,7 +168,7 @@ def main():
     train_ds, eval_ds = load_and_prepare_jsonl(TRAIN_JSONL, EVAL_JSONL or None)
     print(f"✅ 데이터 준비 완료 (학습: {len(train_ds)}개)")
 
-    # SFT 설정 - 호환성 문제 해결
+    # SFT 설정
     sft_config = SFTConfig(
         output_dir=OUTPUT_DIR,
         dataset_text_field="text",
@@ -191,8 +190,7 @@ def main():
         gradient_checkpointing=True,
         dataloader_pin_memory=False,
         remove_unused_columns=False,
-        warmup_steps=50,
-        max_seq_length=MAX_LENGTH if MAX_LENGTH is not None else 2048,
+        warmup_steps=50
     )
 
     # LoRA 설정
@@ -208,13 +206,11 @@ def main():
     )
     print(f"✅ LoRA 타겟 모듈: {targets}")
 
-    # 트레이너 초기화 - 호환성 문제 해결을 위해 tokenizer 사용
     trainer = SFTTrainer(
         model=model,
         args=sft_config,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        tokenizer=tok,  # processing_class 대신 tokenizer 사용
         peft_config=peft_cfg,
     )
 
