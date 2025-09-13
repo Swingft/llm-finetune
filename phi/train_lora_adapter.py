@@ -11,7 +11,8 @@ from trl import SFTTrainer, SFTConfig
 # =========================
 # 0) 환경 / 토큰
 # =========================
-HF_TOKEN: Optional[str] = os.environ.get("HF_TOKEN")
+
+# HF_TOKEN: Optional[str] = os.environ.get("HF_TOKEN")
 
 # 캐시/경고 소음 줄이기
 os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
@@ -47,10 +48,10 @@ LORA_TARGETS = "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
 # =========================
 # 2) 경로/모델
 # =========================
-MODEL_ID = "microsoft/Phi-3.5-mini-instruct"
+MODEL_ID = "microsoft/Phi-3-mini-128k-instruct"
 
-TRAIN_JSONL = "train.jsonl"
-DATASET_NAME = "MyDataset"  # 데이터셋 특성에 맞게 변경
+TRAIN_JSONL = "json_data.jsonl"
+DATASET_NAME = "sensitive"  # 데이터셋 특성에 맞게 변경
 
 EVAL_JSONL = ""  # 선택 (없으면 빈 문자열)
 OUTPUT_DIR = f"./out/{MODEL_ID.split('/')[-1]}_lora_adapter_r{LORA_R}_{DATASET_NAME}"
@@ -91,26 +92,37 @@ def load_and_prepare_jsonl(train_path: str, eval_path: Optional[str], text_field
 
     cols = set(tr.column_names)
     if not ({"instruction", "output"}.issubset(cols) or {"input", "output"}.issubset(cols)):
-        raise ValueError(f"데이터 컬럼이 맞지 않습니다. 실제 컬럼: {tr.column_names}")
+        raise ValueError(
+            "데이터 컬럼이 맞지 않습니다. 허용 스키마: "
+            "[instruction, output] (+input 가능) 또는 [input, output]. "
+            f"실제 컬럼: {tr.column_names}"
+        )
 
     def to_text(ex):
-        instr = (ex.get("instruction") or ex.get("input") or "").strip()
+        instr = (ex.get("instruction") or "").strip()
+        inp = (ex.get("input") or "").strip()
         out = (ex.get("output") or "").strip()
-        inp = (ex.get("input") if "instruction" in ex else "").strip()
 
-        if not instr and inp and "instruction" not in ex:
+        if not instr and inp:
             instr, inp = inp, ""
 
-        if not instr or not out: return None
+        if not instr or not out:
+            return None
 
         if inp:
-            return {text_field: f"### Instruction:\n{instr}\n\n### Input:\n{inp}\n\n### Response:\n{out}"}
+            prompt = f"### Instruction:\n{instr}\n\n### Input:\n{inp}\n\n### Response:\n{out}"
         else:
-            return {text_field: f"### Instruction:\n{instr}\n\n### Response:\n{out}"}
+            prompt = f"### Instruction:\n{instr}\n\n### Response:\n{out}"
+        return {text_field: prompt}
 
-    tr = tr.map(to_text, remove_columns=list(cols)).filter(lambda x: x is not None)
-    if ev:
-        ev = ev.map(to_text, remove_columns=list(cols)).filter(lambda x: x is not None)
+    tr = tr.map(to_text, remove_columns=[], desc="format train").filter(lambda x: x.get(text_field) is not None)
+    if ev is not None:
+        ev = ev.map(to_text, remove_columns=[], desc="format eval").filter(lambda x: x.get(text_field) is not None)
+
+    keep_cols = [text_field]
+    tr = tr.remove_columns([c for c in tr.column_names if c not in keep_cols])
+    if ev is not None:
+        ev = ev.remove_columns([c for c in ev.column_names if c not in keep_cols])
 
     return tr, ev
 
@@ -119,14 +131,12 @@ def load_and_prepare_jsonl(train_path: str, eval_path: Optional[str], text_field
 # 5) 메인 함수
 # =========================
 def main():
-    # 모델 접근 권한 확인
     try:
         from huggingface_hub import HfApi
         HfApi().model_info(MODEL_ID, token=HF_TOKEN)
     except Exception as e:
         raise RuntimeError(f"모델 리포 확인 실패: {MODEL_ID}\n원인: {e}")
 
-    # 시드 고정
     try:
         import random, numpy as np
         random.seed(SEED);
@@ -141,11 +151,9 @@ def main():
     print(f"Model ID: {MODEL_ID}\nOutput Dir: {OUTPUT_DIR}\nLoRA r: {LORA_R}")
     print("=" * 50 + "\n")
 
-    # 토크나이저 로드
     tok = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True, trust_remote_code=True, token=HF_TOKEN)
     if tok.pad_token is None: tok.pad_token = tok.eos_token
 
-    # 모델 로드
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         device_map=DEVICE_MAP,
@@ -158,11 +166,10 @@ def main():
     if torch.cuda.is_available(): model.gradient_checkpointing_enable()
     print("✅ 모델/토크나이저 로드 완료")
 
-    # 데이터 로드
     train_ds, eval_ds = load_and_prepare_jsonl(TRAIN_JSONL, EVAL_JSONL or None)
     print(f"✅ 데이터 준비 완료 (학습: {len(train_ds)}개)")
 
-    # SFT 설정
+    # SFT 설정 - 호환성 문제 해결
     sft_config = SFTConfig(
         output_dir=OUTPUT_DIR,
         dataset_text_field="text",
@@ -173,8 +180,8 @@ def main():
         learning_rate=LR,
         num_train_epochs=EPOCHS,
         logging_steps=LOG_STEPS,
-        eval_strategy="steps" if eval_ds else "no",
-        eval_steps=EVAL_STEPS if eval_ds else None,
+        eval_strategy="steps" if eval_ds is not None else "no",
+        eval_steps=EVAL_STEPS if eval_ds is not None else None,
         save_strategy="steps",
         save_steps=SAVE_STEPS,
         seed=SEED,
@@ -182,27 +189,32 @@ def main():
         fp16=False,
         report_to=[],
         gradient_checkpointing=True,
-        max_seq_length=MAX_LENGTH if MAX_LENGTH else 2048
+        dataloader_pin_memory=False,
+        remove_unused_columns=False,
+        warmup_steps=50,
+        max_seq_length=MAX_LENGTH if MAX_LENGTH is not None else 2048,
     )
 
     # LoRA 설정
     from peft import LoraConfig, TaskType
+    targets = [t.strip() for t in LORA_TARGETS.split(",") if t.strip()]
     peft_cfg = LoraConfig(
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
         lora_dropout=LORA_DROPOUT,
         bias="none",
         task_type=TaskType.CAUSAL_LM,
-        target_modules=[t.strip() for t in LORA_TARGETS.split(",")]
+        target_modules=targets,
     )
+    print(f"✅ LoRA 타겟 모듈: {targets}")
 
-    # 트레이너 초기화 및 학습
+    # 트레이너 초기화 - 호환성 문제 해결을 위해 tokenizer 사용
     trainer = SFTTrainer(
         model=model,
         args=sft_config,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        tokenizer=tok,
+        tokenizer=tok,  # processing_class 대신 tokenizer 사용
         peft_config=peft_cfg,
     )
 
@@ -210,7 +222,6 @@ def main():
     trainer.train()
     print("✅ 학습 완료!")
 
-    # 최종 어댑터 저장
     print("💾 최종 LoRA 어댑터 저장 중...")
     trainer.save_model(OUTPUT_DIR)
     print(f"✅ LoRA 어댑터 저장 완료: {OUTPUT_DIR}")

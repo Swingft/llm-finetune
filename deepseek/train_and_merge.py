@@ -16,7 +16,7 @@ from peft import PeftModel
 # 0) 환경 / 토큰
 # =========================
 
-# HF_TOKEN: Optional[str] = os.environ.get("HF_TOKEN")
+HF_TOKEN: Optional[str] = os.environ.get("HF_TOKEN")
 
 os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
 warnings.filterwarnings("ignore", category=UserWarning)

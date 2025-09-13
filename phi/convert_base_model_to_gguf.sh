@@ -1,41 +1,87 @@
 #!/bin/bash
-# 완전 자동화된 토크나이저 문제 해결 및 양자화 스크립트
+# 베이스 모델 전용 GGUF 변환 및 양자화 스크립트
 
 set -e
 
-MODEL_PATH="/workspace/out/Phi-3-mini-128k-instruct_merged_r128_sensitive/merged_model"
+# 사용법 체크
+if [ -z "$1" ]; then
+    echo "❌ 베이스 모델 경로를 입력해주세요."
+    echo "사용법: $0 [베이스_모델_경로]"
+    echo "예시: $0 microsoft/Phi-3-mini-128k-instruct"
+    echo "     $0 ./downloaded_model/Phi-3-mini-128k-instruct"
+    exit 1
+fi
+
+MODEL_INPUT="$1"
 GGUF_DIR="/workspace/gguf_models"
 
-echo "GGUF 변환 및 양자화 프로세스 시작"
-echo "================================"
+echo "베이스 모델 GGUF 변환 및 양자화 프로세스 시작"
+echo "================================================"
+
+# 모델이 로컬 경로인지 HF 모델명인지 판단
+if [ -d "$MODEL_INPUT" ]; then
+    MODEL_PATH=$(realpath "$MODEL_INPUT")
+    echo "로컬 모델 경로: $MODEL_PATH"
+
+    # 필수 파일 확인
+    if [ ! -f "$MODEL_PATH/config.json" ]; then
+        echo "❌ 유효하지 않은 모델 디렉토리: config.json이 없습니다"
+        exit 1
+    fi
+
+    MODEL_NAME=$(basename "$MODEL_PATH")
+else
+    echo "Hugging Face 모델: $MODEL_INPUT"
+    echo "모델 다운로드 중..."
+
+    # 모델 다운로드
+    python3 << EOF
+from huggingface_hub import snapshot_download
+import os
+
+model_name = "$MODEL_INPUT"
+local_dir = f"./downloaded_models/{model_name.replace('/', '_')}"
+
+try:
+    snapshot_download(
+        repo_id=model_name,
+        local_dir=local_dir,
+        local_dir_use_symlinks=False
+    )
+    print(f"✅ 모델 다운로드 완료: {local_dir}")
+except Exception as e:
+    print(f"❌ 다운로드 실패: {e}")
+    exit(1)
+EOF
+
+    MODEL_PATH="./downloaded_models/${MODEL_INPUT/\//_}"
+    MODEL_PATH=$(realpath "$MODEL_PATH")
+    MODEL_NAME=$(basename "$MODEL_PATH")
+fi
 
 # GGUF 디렉토리 생성
 mkdir -p "$GGUF_DIR"
 
 echo "토크나이저 문제 직접 해결 중..."
-
-# 방법 1: 원본 Phi-3.5-mini-instruct에서 tokenizer.model 가져오기
-echo "원본 모델에서 tokenizer.model 다운로드 중..."
-
 cd /workspace
 
-# huggingface-hub를 통한 직접 다운로드
-python3 << 'EOF'
+# 토크나이저 문제 해결 (성공한 스크립트와 동일)
+python3 << EOF
 from huggingface_hub import hf_hub_download
 import shutil
 import os
 
+model_path = "$MODEL_PATH"
+
 try:
-    # tokenizer.model 다운로드
-    print("tokenizer.model 다운로드 시도...")
+    print("Phi-3.5-mini-instruct에서 tokenizer.model 다운로드...")
     tokenizer_path = hf_hub_download(
         repo_id="microsoft/Phi-3.5-mini-instruct",
         filename="tokenizer.model",
         cache_dir="/tmp/phi_download"
     )
 
-    # 타겟 위치로 복사 (현재 모델 경로에 맞게 수정)
-    target_path = "/workspace/out/Phi-3-mini-128k-instruct_merged_r128_sensitive/merged_model/tokenizer.model"
+    target_path = f"{model_path}/tokenizer.model"
     shutil.copy(tokenizer_path, target_path)
     print(f"tokenizer.model을 {target_path}로 복사 완료")
 
@@ -43,13 +89,10 @@ except Exception as e:
     print(f"tokenizer.model 다운로드 실패: {e}")
     print("대안 방법을 시도합니다...")
 
-    # 대안: tokenizer.json을 tokenizer.model로 심볼릭 링크 생성
-    import json
-    tokenizer_json_path = "/workspace/out/Phi-3-mini-128k-instruct_merged_r128_sensitive/merged_model/tokenizer.json"
+    tokenizer_json_path = f"{model_path}/tokenizer.json"
 
     if os.path.exists(tokenizer_json_path):
-        # 빈 tokenizer.model 파일 생성 (스크립트가 파일 존재만 확인하는 경우)
-        with open("/workspace/out/Phi-3-mini-128k-instruct_merged_r128_sensitive/merged_model/tokenizer.model", "w") as f:
+        with open(f"{model_path}/tokenizer.model", "w") as f:
             f.write("")
         print("임시 tokenizer.model 파일 생성 완료")
     else:
@@ -57,12 +100,10 @@ except Exception as e:
         exit(1)
 EOF
 
-# 방법 2: llama.cpp 설치 및 빌드
+# llama.cpp 설치 및 빌드 (성공한 스크립트와 동일)
 if [ ! -d "/workspace/llama.cpp" ]; then
     echo "llama.cpp 설치 중..."
-    cd /workspace
-    git clone https://github.com/ggerganov/llama.cpp.git
-    cd /workspace/llama.cpp
+    git clone https://github.com/ggerganov/llama.cpp.git /workspace/llama.cpp
 else
     echo "llama.cpp 최신 버전으로 업데이트..."
     cd /workspace/llama.cpp
@@ -75,8 +116,9 @@ echo "빌드 도구 설치 중..."
 apt-get update -qq
 apt-get install -y cmake build-essential libcurl4-openssl-dev
 
-# CMake 빌드 (CURL 비활성화 옵션 추가)
+# CMake 빌드
 echo "llama.cpp CMake 빌드 중..."
+cd /workspace/llama.cpp
 mkdir -p build
 cd build
 cmake .. -DLLAMA_CURL=OFF
@@ -96,11 +138,11 @@ pip install -q -r requirements.txt
 
 echo "변환 시도 중..."
 
-MODEL_NAME=$(basename "$MODEL_PATH")
-OUTPUT_NAME="${MODEL_NAME}-finetuned"
+MODEL_NAME_BASE=$(basename "$MODEL_PATH")
+OUTPUT_NAME="${MODEL_NAME_BASE}-base"
 CONVERSION_SUCCESS=false
 
-# A. 환경변수로 토크나이저 타입 강제 지정 + 여러 옵션 조합 시도
+# 환경변수 설정
 export TOKENIZER_TYPE="hf"
 
 echo "방법 1: 환경변수 + BPE 옵션..."
@@ -112,7 +154,7 @@ if python convert_hf_to_gguf.py "$MODEL_PATH" \
     CONVERSION_SUCCESS=true
 fi
 
-# B. 기본 방법
+# 기본 방법
 if [ "$CONVERSION_SUCCESS" != "true" ]; then
     echo "방법 2: 기본 변환..."
     if python convert_hf_to_gguf.py "$MODEL_PATH" \
@@ -123,7 +165,7 @@ if [ "$CONVERSION_SUCCESS" != "true" ]; then
     fi
 fi
 
-# C. vocab-dir 옵션
+# vocab-dir 옵션
 if [ "$CONVERSION_SUCCESS" != "true" ]; then
     echo "방법 3: vocab-dir 옵션..."
     if python convert_hf_to_gguf.py "$MODEL_PATH" \
@@ -135,7 +177,7 @@ if [ "$CONVERSION_SUCCESS" != "true" ]; then
     fi
 fi
 
-# D. skip-unknown 옵션
+# skip-unknown 옵션
 if [ "$CONVERSION_SUCCESS" != "true" ]; then
     echo "방법 4: skip-unknown 옵션..."
     if python convert_hf_to_gguf.py "$MODEL_PATH" \
@@ -199,10 +241,10 @@ for level in "${!QUANT_LEVELS[@]}"; do
 done
 
 echo ""
-echo "🎉 GGUF 변환 및 양자화 완료!"
+echo "🎉 베이스 모델 GGUF 변환 및 양자화 완료!"
 echo "================================"
 echo "생성된 모델 파일들:"
-ls -lh *.gguf | awk '{print "  📁 " $9 " (" $5 ")"}'
+ls -lh *.gguf | grep "${OUTPUT_NAME}" | awk '{print "  📁 " $9 " (" $5 ")"}'
 
 echo ""
 echo "📊 파일 크기 비교:"
@@ -214,17 +256,12 @@ echo "Q5_K_M:       $(du -h "${OUTPUT_NAME}-q5_k_m.gguf" | cut -f1) (고품질)"
 echo ""
 echo "💡 사용 추천:"
 echo "  • 빠른 추론 + 작은 크기: ${OUTPUT_NAME}-q4_0.gguf"
-echo "  • 균형잡힌 성능: ${OUTPUT_NAME}-q4_k_m.gguf"
+echo "  • 균형잡힌 성능: ${OUTPUT_NAME}-q4_k_m.gguf (추천)"
 echo "  • 높은 품질: ${OUTPUT_NAME}-q5_k_m.gguf"
 
-# 압축 파일 생성 (주석처리 - 시간이 많이 걸림)
-# echo ""
-# echo "📦 압축 파일 생성 중..."
-# tar -czf "${OUTPUT_NAME}-gguf-models.tar.gz" *.gguf
-# ARCHIVE_SIZE=$(du -h "${OUTPUT_NAME}-gguf-models.tar.gz" | cut -f1)
-# echo "✅ 압축 완료: ${OUTPUT_NAME}-gguf-models.tar.gz ($ARCHIVE_SIZE)"
-
 echo ""
+echo "📝 참고사항:"
+echo "  • 이것은 순수 베이스 모델입니다 (파인튜닝 없음)"
+echo "  • 파인튜닝된 모델과 비교해보려면 동일한 프롬프트로 테스트해보세요"
 echo "🚀 모든 작업 완료! 🚀"
 echo "================================"
-# echo "압축 파일을 다운로드하여 사용하세요: ${OUTPUT_NAME}-gguf-models.tar.gz"
