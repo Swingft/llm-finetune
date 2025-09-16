@@ -3,6 +3,9 @@
 
 set -e
 
+echo "🐍 필수 파이썬 라이브러리를 설치합니다..."
+pip install torch datasets transformers trl peft psutil huggingface-hub accelerate bitsandbytes sentencepiece
+
 echo "🚀 LoRA 어댑터 학습 및 GGUF 변환 워크플로우를 시작합니다. (v5.0)"
 echo "=================================================="
 

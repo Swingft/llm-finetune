@@ -1,4 +1,10 @@
+# macOS
+.DS_Store
+# JetBrains IDEs
+.idea/
 deepseek/.env
 phi/.env
 .env
 /phi/json_data.jsonl
+phi/merged_model-finetuned-q5_k_m.gguf
+

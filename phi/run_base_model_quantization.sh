@@ -3,6 +3,9 @@
 
 set -e
 
+echo "🐍 필수 파이썬 라이브러리를 설치합니다..."
+pip install torch datasets transformers trl peft psutil huggingface-hub accelerate bitsandbytes sentencepiece
+
 echo "🚀 베이스 모델 양자화 워크플로우를 시작합니다."
 echo "=================================================="
 
